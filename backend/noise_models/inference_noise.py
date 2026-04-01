@@ -78,7 +78,7 @@ _try_import_friend_models()
 def _fallback_environment(audio_path: str) -> str:
     """Load raw audio and run the rule-based detector from audio_cleaning.py."""
     try:
-        from backend.audio_cleaning import detect_noise_environment
+        from audio_cleaning import detect_noise_environment
         audio, sr = librosa.load(audio_path, sr=None, mono=True)
         env = detect_noise_environment(audio, sr)
         logger.info("[inference_noise] Fallback rule-based result: %s", env)

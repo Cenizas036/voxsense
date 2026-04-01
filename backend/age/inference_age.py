@@ -2,7 +2,7 @@ import os
 import numpy as np
 import librosa
 import torch
-from backend.models.age_model import AgeModel
+from models.age_model import AgeModel
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

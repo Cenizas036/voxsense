@@ -2,7 +2,7 @@ import os
 import numpy as np
 import librosa
 import torch
-from backend.models.gender_model import GenderModel
+from models.gender_model import GenderModel
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

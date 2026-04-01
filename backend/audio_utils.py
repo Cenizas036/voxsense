@@ -3,7 +3,7 @@ import numpy as np
 import soundfile as sf
 import tempfile
 import os
-from backend.audio_cleaning import clean_audio, enhance_audio, extract_voice
+from audio_cleaning import clean_audio, enhance_audio, extract_voice
 
 TARGET_SR = 22050
 MIN_DURATION = 1.0

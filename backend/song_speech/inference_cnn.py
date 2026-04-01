@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 from scipy.signal import butter, lfilter
 
-from backend.models.song_speech_model import SongSpeechModel
+from models.song_speech_model import SongSpeechModel
 
 # ============================================================
 # DEVICE

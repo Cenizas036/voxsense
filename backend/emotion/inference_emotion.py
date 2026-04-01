@@ -2,7 +2,7 @@ import os
 import numpy as np
 import librosa
 import torch
-from backend.models.emotion_model import EmotionModel
+from models.emotion_model import EmotionModel
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

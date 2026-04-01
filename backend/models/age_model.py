@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from backend.models.cnn_backbone import CNNBackbone
+from models.cnn_backbone import CNNBackbone
 
 
 class AgeModel(nn.Module):

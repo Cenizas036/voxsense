@@ -8,7 +8,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
 
-from backend.models.song_speech_model import SongSpeechModel
+from models.song_speech_model import SongSpeechModel
 
 
 # ======================

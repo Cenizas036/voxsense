@@ -7,8 +7,8 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
 
-from backend.models.emotion_model import EmotionModel
-from backend.preprocessing.dataset_parser import parse_metadata
+from models.emotion_model import EmotionModel
+from preprocessing.dataset_parser import parse_metadata
 
 
 # ======================
