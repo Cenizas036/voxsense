@@ -12,21 +12,25 @@ MODEL_DEFAULT = os.path.join(BASE_DIR, "gender_model.pth")
 MODEL_PATH    = MODEL_V2 if os.path.exists(MODEL_V2) else MODEL_DEFAULT
 
 print("Loading Gender Model:", MODEL_PATH)
-model = GenderModel().to(device)
-checkpoint = torch.load(MODEL_PATH, map_location=device, weights_only=False)
+model = None
 try:
-    model.load_state_dict(checkpoint, strict=True)
-    print("Gender model: full checkpoint loaded (strict).")
-except RuntimeError:
-    filtered = {}
-    for k, v in checkpoint.items():
-        if k.startswith("features."):
-            filtered["backbone." + k] = v
-        else:
-            filtered[k] = v
-    model.load_state_dict(filtered, strict=False)
-    print("Gender model: partial load.")
-model.eval()
+    model = GenderModel().to(device)
+    checkpoint = torch.load(MODEL_PATH, map_location=device, weights_only=False)
+    try:
+        model.load_state_dict(checkpoint, strict=True)
+        print("Gender model: full checkpoint loaded (strict).")
+    except RuntimeError:
+        filtered = {}
+        for k, v in checkpoint.items():
+            if k.startswith("features."):
+                filtered["backbone." + k] = v
+            else:
+                filtered[k] = v
+        model.load_state_dict(filtered, strict=False)
+        print("Gender model: partial load.")
+    model.eval()
+except Exception as e:
+    print(f"Gender model not loaded: {e}")
 
 
 # ============================================================
@@ -131,31 +135,19 @@ def preprocess_audio(audio: np.ndarray, sr: int) -> torch.Tensor:
 
 
 # ============================================================
-# PREDICT GENDER — CNN + pitch + spectral, balanced for female
-#
-# Pitch reference ranges (conversational speech):
-#   Male typical:    85–180 Hz  (mean ~120 Hz)
-#   Female typical: 165–255 Hz  (mean ~210 Hz)
-#   Overlap zone:   165–180 Hz  ← spectral score breaks the tie
-#
-# BUG FIXED: The old code forced Male for pitch < 175 Hz whenever
-# spec_score >= -0.3 (which is nearly always true). This caused
-# low-pitched women (165-175 Hz, very common) to be misclassified.
-# The fix:
-#   1. Lowered the hard Male cutoff from 145 → 130 Hz
-#   2. In the 130–165 Hz zone, require STRONG male spectral evidence
-#      (spec_score > 0.5) before overriding a female CNN prediction
-#   3. Added a genuine overlap zone (165–185 Hz) that uses CNN +
-#      spectral blending instead of defaulting to Male
-#   4. Hard Female cutoff raised from 225 → 210 Hz
+# PREDICT GENDER
 # ============================================================
 
 def predict_gender(audio: np.ndarray, sr: int) -> dict:
-    """
-    CNN + pitch + spectral gender prediction.
-    Balanced to not over-classify females as male.
-    """
-    # ── CNN prediction ────────────────────────────────────────
+    if model is None:
+        return {
+            "gender": "unknown",
+            "confidence": 0.0,
+            "method": "model_unavailable",
+            "probabilities": {"male": 0.0, "female": 0.0},
+            "pitch_hz": 0.0,
+        }
+
     with torch.no_grad():
         tensor = preprocess_audio(audio, sr)
         output = model(tensor)
@@ -166,48 +158,35 @@ def predict_gender(audio: np.ndarray, sr: int) -> dict:
     cnn_label   = "Female" if female_prob > male_prob else "Male"
     cnn_conf    = max(male_prob, female_prob)
 
-    # ── Pitch ─────────────────────────────────────────────────
     pitch       = extract_pitch(audio, sr)
     mean_f0     = pitch["mean"]
     median_f0   = pitch["median"]
     voiced_frac = pitch["voiced_frac"]
     reliable_f0 = median_f0 if median_f0 > 0 else mean_f0
 
-    # ── Spectral score (+ = male evidence, - = female evidence) ─
     spec_score = spectral_gender_score(audio, sr)
 
-    # ── Defaults: trust CNN if pitch is unreliable ────────────
     final_label = cnn_label
     final_conf  = cnn_conf
     method      = "cnn"
 
     if voiced_frac > 0.15 and reliable_f0 > 0:
 
-        # ── Zone 1: Definitely Male (< 130 Hz) ───────────────
-        # No biological female speaks this low in normal speech
         if reliable_f0 < 130.0:
             final_label = "Male"
             final_conf  = min(0.97, 0.85 + (130.0 - reliable_f0) / 150.0)
             method      = "pitch"
 
-        # ── Zone 2: Very likely Male (130–165 Hz) ─────────────
-        # Mostly male range, but a small number of very low-pitched
-        # women land here. Only override CNN→Female if spectral
-        # evidence is also clearly male (spec_score > 0.5).
         elif reliable_f0 < 165.0:
             if cnn_label == "Male" or spec_score > 0.5:
                 final_label = "Male"
                 final_conf  = min(0.92, 0.72 + (165.0 - reliable_f0) / 200.0)
                 method      = "pitch+spectral"
             else:
-                # CNN says Female AND spectral is ambiguous/female → trust CNN
                 final_label = "Female"
                 final_conf  = max(0.60, cnn_conf)
                 method      = "cnn_over_pitch"
 
-        # ── Zone 3: Overlap / ambiguous (165–185 Hz) ──────────
-        # True overlap zone. Use spectral score to break the tie,
-        # but respect CNN when spectral is ambiguous.
         elif reliable_f0 < 185.0:
             if spec_score > 0.6:
                 final_label = "Male"
@@ -218,7 +197,6 @@ def predict_gender(audio: np.ndarray, sr: int) -> dict:
                 final_conf  = 0.68
                 method      = "spectral"
             else:
-                # Blend: slight female lean since pitch is already above male mean
                 blend_female = female_prob + 0.08
                 blend_male   = male_prob - 0.08
                 if blend_female > blend_male:
@@ -229,22 +207,16 @@ def predict_gender(audio: np.ndarray, sr: int) -> dict:
                     final_conf  = min(0.80, blend_male)
                 method = "cnn+pitch_blend"
 
-        # ── Zone 4: Very likely Female (185–215 Hz) ───────────
-        # Mostly female range, but some male tenors/countertenors exist.
-        # Only override CNN→Male if spectral evidence is also female.
         elif reliable_f0 < 215.0:
             if cnn_label == "Female" or spec_score < -0.5:
                 final_label = "Female"
                 final_conf  = min(0.92, 0.72 + (reliable_f0 - 185.0) / 200.0)
                 method      = "pitch+spectral"
             else:
-                # CNN says Male AND spectral is ambiguous/male → trust CNN
                 final_label = "Male"
                 final_conf  = max(0.60, cnn_conf)
                 method      = "cnn_over_pitch"
 
-        # ── Zone 5: Definitely Female (>= 215 Hz) ─────────────
-        # No biological male speaks this high in normal speech
         else:
             final_label = "Female"
             final_conf  = min(0.97, 0.85 + (reliable_f0 - 215.0) / 200.0)
