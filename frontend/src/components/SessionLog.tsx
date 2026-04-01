@@ -36,7 +36,7 @@ const EMOTION_COLOR: Record<string, string> = {
   angry: "#ef4444", fear: "#8b5cf6", disgust: "#10b981", surprise: "#f97316",
 };
 const MODEL_DISPLAY_NAMES: Record<string, string> = {
-  rf: "Random Forest", svm: "SVM (RBF)", xgb: "XGBoost",
+  svm: "SVM (RBF)", xgb: "XGBoost",
   cnn: "CNN (1D)", lstm: "Bi-LSTM",
   attentive_lstm: "Attentive LSTM", transformer_cnn: "Transformer+DSOM",
 };

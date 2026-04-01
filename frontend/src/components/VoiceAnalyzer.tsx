@@ -72,7 +72,7 @@ const MODEL_DISPLAY_NAMES: Record<string, string> = {
   transformer_cnn: "Transformer+DSOM",
 };
 
-const MODEL_ORDER = ["rf", "svm", "xgb", "cnn", "lstm", "attentive_lstm", "transformer_cnn"];
+const MODEL_ORDER = ["svm", "xgb", "cnn", "lstm", "attentive_lstm", "transformer_cnn"];
 
 const EMOTION_EMOJI: Record<string, string> = {
   neutral: "😐", happy: "😊", sad: "😢",

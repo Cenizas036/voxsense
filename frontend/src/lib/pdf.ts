@@ -73,7 +73,7 @@ const EMOTION_COLOR: Record<string, string> = {
 };
 
 const MODEL_DISPLAY_NAMES: Record<string, string> = {
-  rf: "Random Forest", svm: "SVM (RBF)", xgb: "XGBoost",
+  svm: "SVM (RBF)", xgb: "XGBoost",
   cnn: "CNN (1D)", lstm: "Bi-LSTM",
   attentive_lstm: "Attentive LSTM", transformer_cnn: "Transformer+DSOM",
 };
