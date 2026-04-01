@@ -1,0 +1,51 @@
+﻿# ── Environment / Secrets ──────────────────────────────
+.env
+.env.local
+.env.production
+.env*.local
+*.env
+
+# ── Python ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pth
+*.pkl
+*.h5
+*.pt
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# ── Large data / datasets ──────────────────────────────
+backend/datasets/
+backend/data/
+backend/song_speech_data/
+backend/outputs/
+outputs/
+
+# ── ML model weights ───────────────────────────────────
+*.pth
+*.pt
+*.joblib
+
+# ── Generated plots / temp files ───────────────────────
+backend/static/plots/
+backend/static/audio/
+
+# ── Next.js ────────────────────────────────────────────
+frontend/.next/
+frontend/node_modules/
+frontend/build.log
+frontend/build_utf8.log
+frontend/ts_errors.log
+frontend/ts_errors_utf8.log
+frontend/tsconfig.tsbuildinfo
+
+# ── Misc ───────────────────────────────────────────────
+.vscode/
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini

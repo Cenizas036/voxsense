@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+python-multipart
+librosa
+numpy
+scipy
+soundfile
+torch
+torchaudio
+openai-whisper
+noisereduce
+matplotlib
+scikit-learn
+joblib
