@@ -20,21 +20,26 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "cnn_song_speech.pth")
 
-model = SongSpeechModel().to(device)
+model = None
+try:
+    _model = SongSpeechModel().to(device)
+    checkpoint = torch.load(MODEL_PATH, map_location=device, weights_only=False)
 
-checkpoint = torch.load(MODEL_PATH, map_location=device, weights_only=False)
+    remapped = {}
+    for k, v in checkpoint.items():
+        if k.startswith("features."):
+            remapped["backbone." + k] = v
+        elif k.startswith("classifier."):
+            remapped[k] = v
+        else:
+            remapped[k] = v
 
-remapped = {}
-for k, v in checkpoint.items():
-    if k.startswith("features."):
-        remapped["backbone." + k] = v
-    elif k.startswith("classifier."):
-        remapped[k] = v
-    else:
-        remapped[k] = v
-
-model.load_state_dict(remapped, strict=False)
-model.eval()
+    _model.load_state_dict(remapped, strict=False)
+    _model.eval()
+    model = _model
+    print("Song/speech CNN model loaded successfully.")
+except Exception as e:
+    print(f"Song/speech model not loaded: {e}, using acoustic inference only.")
 
 # ============================================================
 # BANDPASS FILTER
@@ -328,6 +333,15 @@ def predict_song_or_speech(audio, sr):
 
     # ── STAGE 3: CNN confirms music (ambiguous zone 0.55-0.75) ──
     if music_conf < 0.75:
+        if model is None:
+            # CNN not available — fall back to acoustic result
+            final_conf = round(min(0.95, 0.75 + (music_conf - 0.55) * 0.5), 2)
+            return {
+                "label":         "song",
+                "confidence":    final_conf,
+                "probabilities": [[round(1 - final_conf, 2), final_conf]]
+            }
+
         with torch.no_grad():
             input_tensor  = preprocess_audio(audio, sr)
             output        = model(input_tensor)
