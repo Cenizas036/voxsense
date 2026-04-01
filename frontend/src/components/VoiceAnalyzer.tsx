@@ -62,9 +62,7 @@ interface AnalysisResult {
 // ── Constants ──────────────────────────────────────────────────────────
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-const MODEL_DISPLAY_NAMES: Record<string, string> = {
-  rf:              "Random Forest",
-  svm:             "SVM (RBF)",
+const MODEL_DISPLAY_NAMES: Record<string, string> = {  svm:             "SVM (RBF)",
   xgb:             "XGBoost",
   cnn:             "CNN (1D)",
   lstm:            "Bi-LSTM",
@@ -1582,3 +1580,4 @@ export default function VoiceAnalyzer({ onResult, onSaveProfile }: {
     </>
   );
 }
+
