@@ -23,20 +23,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
-from backend.audio_utils               import load_raw_audio
-from backend.audio_cleaning            import enhance_audio, extract_noise, extract_voice
-from backend.visualization             import save_plots
-from backend.gender.inference_gender   import predict_gender
-from backend.age.inference_age         import predict_age
-from backend.emotion.inference_emotion import predict_emotion
-from backend.song_speech.inference_cnn import predict_song_or_speech
+from audio_utils               import load_raw_audio
+from audio_cleaning            import enhance_audio, extract_noise, extract_voice
+from visualization             import save_plots
+from gender.inference_gender   import predict_gender
+from age.inference_age         import predict_age
+from emotion.inference_emotion import predict_emotion
+from song_speech.inference_cnn import predict_song_or_speech
 
 # ── Noise models — always imported; function handles its own fallback ─────────
-from backend.noise_models.inference_noise import predict_noise_environment
+from noise_models.inference_noise import predict_noise_environment
 
 # ── Friend comparison models ──────────────────────────────────────────────────
 try:
-    from backend.friend_models.inference_friend import run_all_models as _run_friend_models
+    from friend_models.inference_friend import run_all_models as _run_friend_models
     _FRIEND_MODELS_AVAILABLE = True
 except Exception as _e:
     logging.warning("Friend comparison models not available: %s", _e)
