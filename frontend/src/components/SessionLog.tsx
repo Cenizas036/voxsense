@@ -436,7 +436,7 @@ function ReplayModal({ session, onClose, isDark }: { session: Session; onClose: 
           {ra?.plot_url && (
             <div style={{ borderRadius: 16, overflow: "hidden", border: `1px solid ${tk.sectionBdr}` }}>
               <div style={{ padding: "10px 14px", fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: tk.label, borderBottom: `1px solid ${tk.sectionBdr}`, background: tk.header }}>📊 MFCC Spectrogram</div>
-              <img src={`http://localhost:8000${ra.plot_url}`} alt="MFCC Spectrogram" style={{ width: "100%", display: "block" }}
+              <img src={`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}${ra.plot_url}`} alt="MFCC Spectrogram" style={{ width: "100%", display: "block" }}
                 onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
             </div>
           )}
