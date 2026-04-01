@@ -390,3 +390,4 @@ async def analyze_segments(file: UploadFile = File(...), segments: str = ""):
                 os.remove(temp_path)
             except OSError:
                 pass
+
