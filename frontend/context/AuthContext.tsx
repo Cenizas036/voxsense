@@ -13,7 +13,6 @@ import { auth, db } from "@/lib/firebase";
 export interface UserProfile {
   uid: string;
   email: string | null;
-  phone: string | null;
   displayName: string | null;
   photoURL: string | null;
   age: string;
@@ -46,29 +45,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Fetch or create a Firestore profile document for the user
   const fetchProfile = async (firebaseUser: User) => {
-    const ref  = doc(db, "users", firebaseUser.uid);
-    const snap = await getDoc(ref);
-
-    if (snap.exists()) {
-      setProfile(snap.data() as UserProfile);
-    } else {
-      // First-time user — create a blank profile document
-      const newProfile: UserProfile = {
-        uid:         firebaseUser.uid,
-        email:       firebaseUser.email,
-        phone:       firebaseUser.phoneNumber,
-        displayName: firebaseUser.displayName,
-        photoURL:    firebaseUser.photoURL,
-        age:         "",
-        gender:      "",
-        occupation:  "",
-        createdAt:   serverTimestamp(),
-        lastLoginAt: serverTimestamp(),
-      };
-      await setDoc(ref, newProfile);
-      setProfile(newProfile);
+    try {
+      const ref  = doc(db, "users", firebaseUser.uid);
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        setProfile(snap.data() as UserProfile);
+      } else {
+        const newProfile: UserProfile = {
+          uid:         firebaseUser.uid,
+          email:       firebaseUser.email,
+          displayName: firebaseUser.displayName,
+          photoURL:    firebaseUser.photoURL,
+          age:         "",
+          gender:      "",
+          occupation:  "",
+          createdAt:   serverTimestamp(),
+          lastLoginAt: serverTimestamp(),
+        };
+        await setDoc(ref, newProfile);
+        setProfile(newProfile);
+      }
+    } catch (err) {
+      console.error("🔥 Firestore fetchProfile error:", err);
     }
   };
 
@@ -83,7 +82,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
-    // Firebase calls this whenever auth state changes (login / logout / page refresh)
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser);
       if (firebaseUser) {
@@ -93,7 +91,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       setLoading(false);
     });
-
     return () => unsubscribe();
   }, []);
 
