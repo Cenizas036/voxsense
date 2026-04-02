@@ -382,9 +382,11 @@ git push origin feature/your-feature-name
 
 ---
 
-## 👤 Author
+## 👤 Authors
 
 **Sanket** — [@Cenizas036](https://github.com/Cenizas036)
+
+**Suraj** — [@TurboSnail03](https://github.com/TurboSnail03)
 
 Built as a mini project exploring multi-model audio intelligence pipelines, production ML deployment, and full-stack AI systems.
 
