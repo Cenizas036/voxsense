@@ -53,7 +53,7 @@ Everything runs in a **single API call**. No queue. No waiting. No black box.
 |:---:|:---:|
 | ![Landing Page](1.png) | ![Dashboard](2.png) |
 
-| Analysis Results | Model Comparison |
+| Loading Screen | Model Comparison |
 |:---:|:---:|
 | ![Analysis Results](3.png) | ![Model Comparison](4.png) |
 
