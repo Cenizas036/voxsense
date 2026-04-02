@@ -5,12 +5,10 @@ FastAPI entry point for the Voice Intelligence System.
 
 Pipeline order (critical):
   1. Load raw audio (resample, duration limits — NO cleaning)
-  2. Enhance audio (DC offset, hum removal, highpass, normalize — preserves noise character)
-  3. Extract noise from enhanced audio (enhanced - voice = noise residual)
-  4. Detect noise type on the extracted noise residual
-  5. Check for speech content (transcript flag or HPR/CV_RMS heuristics)
-  6. If speech: extract clean voice from enhanced audio → run age/gender/emotion
-  7. If no speech: return noise-only result
+  2. Run noise detection on the RAW audio file (before any processing)
+  3. Enhance audio (DC offset, hum removal, highpass, normalize)
+  4. Check for speech content
+  5. Extract clean voice from enhanced audio → run age/gender/emotion
 """
 
 import os
@@ -106,36 +104,34 @@ async def analyze_audio(
     has_transcript: str = Form("false"),
     source: str = Form("upload")
 ):
-    temp_path = _TEMP_DIR / f"{uuid.uuid4()}.audio"
+    temp_path = _TEMP_DIR / f"{uuid.uuid4()}.wav"
     try:
-        # Save upload to disk
-        contents = await file.read()
-        with open(temp_path, "wb") as f:
-            f.write(contents)
-
+        # Save upload to disk as wav so noise models can read it directly
         import numpy as np
         import librosa
         import soundfile as sf
 
+        contents = await file.read()
+        raw_upload_path = _TEMP_DIR / f"{uuid.uuid4()}_raw_upload"
+        with open(raw_upload_path, "wb") as f:
+            f.write(contents)
+
         # ── STEP 1: LOAD RAW AUDIO ──────────────────────────────────────
-        raw_audio, sr = load_raw_audio(str(temp_path))
+        raw_audio, sr = load_raw_audio(str(raw_upload_path))
         logger.info("[pipeline] Loaded raw audio: %.2fs @ %dHz", len(raw_audio)/sr, sr)
 
-        # ── STEP 2: ENHANCE (preserves noise character) ─────────────────
-        enhanced = enhance_audio(raw_audio, sr)
-        logger.info("[pipeline] Enhanced audio (noise character preserved)")
+        # ── STEP 2: SAVE RAW AUDIO AS WAV for noise model ───────────────
+        # Write the raw (unprocessed) audio to a wav file so that
+        # predict_noise_environment gets the same signal your friend's
+        # predict_combined.py would receive — no cleaning, no residual subtraction
+        raw_wav_path = _TEMP_DIR / f"{uuid.uuid4()}_raw.wav"
+        sf.write(str(raw_wav_path), raw_audio, sr)
+        logger.info("[pipeline] Saved raw wav for noise detection: %s", raw_wav_path)
 
-        # ── STEP 3: EXTRACT NOISE from enhanced audio ───────────────────
-        noise_residual = extract_noise(enhanced, sr)
-        noise_rms = float(np.sqrt(np.mean(noise_residual ** 2)))
-        logger.info("[pipeline] Extracted noise residual (RMS=%.4f)", noise_rms)
-
-        # ── STEP 4: DETECT NOISE TYPE on extracted noise residual ────────
-        # User requested to detect noise directly from the separated noise component
-        noise_path = _TEMP_DIR / f"{uuid.uuid4()}_noise_residual.wav"
-        sf.write(str(noise_path), noise_residual, sr)
-
-        noise_result = predict_noise_environment(str(noise_path))
+        # ── STEP 3: DETECT NOISE on raw audio ───────────────────────────
+        # This mirrors exactly what your friend does in predict_combined.py
+        # Raw audio → preprocess (inside inference_noise) → model inference
+        noise_result = predict_noise_environment(str(raw_wav_path))
         noise_env    = noise_result["audio_environment"]
         noise_detail = {
             "scene":            noise_result["scene"],
@@ -155,10 +151,18 @@ async def analyze_audio(
             noise_result["noise_type"], noise_result["noise_confidence"],
         )
 
-        try:
-            noise_path.unlink()
-        except Exception:
-            pass
+        # Clean up temp files
+        for p in [raw_upload_path, raw_wav_path]:
+            try:
+                Path(p).unlink()
+            except Exception:
+                pass
+
+        # ── STEP 4: ENHANCE audio for voice inference ────────────────────
+        # From here on, enhanced/cleaned audio is used for age/gender/emotion
+        # Noise detection is already done above on raw audio — no interference
+        enhanced = enhance_audio(raw_audio, sr)
+        logger.info("[pipeline] Enhanced audio for voice inference")
 
         # ── STEP 5: CHECK FOR SPEECH CONTENT ────────────────────────────
         y_harmonic, y_percussive = librosa.effects.hpss(enhanced)
@@ -167,14 +171,16 @@ async def analyze_audio(
         frame_rms = librosa.feature.rms(y=enhanced, frame_length=1024, hop_length=512)[0]
         cv_rms = float(np.std(frame_rms) / (np.mean(frame_rms) + 1e-8))
 
-        logger.info(f"[pipeline] Content check: Source={source}, HasTranscript={has_transcript}, HPR={hpr:.3f}, CV_RMS={cv_rms:.3f}")
+        logger.info(
+            "[pipeline] Content check: Source=%s, HasTranscript=%s, HPR=%.3f, CV_RMS=%.3f",
+            source, has_transcript, hpr, cv_rms
+        )
 
-        # ── OVERRIDE: User requested to ALWAYS extract voice and run inference
-        # even if it's pure noise. Skipping the early exit.
+        # Always infer — override early exit
         has_content = True
-        logger.info(f"[pipeline] Content check overridden: ALWAYS inferring voice/emotion/age/gender.")
+        logger.info("[pipeline] Content check overridden: ALWAYS inferring voice/emotion/age/gender.")
 
-        # ── STEP 6: EXTRACT CLEAN VOICE from enhanced audio ─────────────
+        # ── STEP 6: EXTRACT CLEAN VOICE ─────────────────────────────────
         voice_audio = extract_voice(enhanced, sr)
         logger.info("[pipeline] Extracted clean voice for inference")
 
@@ -189,8 +195,8 @@ async def analyze_audio(
             gender_result  = predict_gender(voice_audio, sr)
             age_result     = predict_age(voice_audio, sr)
 
-            raw_probs      = emotion_result.get("probabilities", {})
-            breakdown      = {
+            raw_probs = emotion_result.get("probabilities", {})
+            breakdown = {
                 k: round(v * 100, 1) if v <= 1.0 else round(v, 1)
                 for k, v in raw_probs.items()
             } if raw_probs else {}
@@ -252,7 +258,6 @@ async def analyze_audio(
             avatar = f"young{'m' if is_male else 'w'}.png"
         avatar_url = f"/static/images/{avatar}"
 
-        # Emotion breakdown
         raw_probs = emotion_result.get("probabilities", {})
         breakdown = {
             k: round(v * 100, 1) if v <= 1.0 else round(v, 1)
@@ -302,17 +307,11 @@ async def analyze_audio(
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Per-segment emotion endpoint (for transcript annotations)
+# Per-segment emotion endpoint
 # ══════════════════════════════════════════════════════════════════════
 
 @app.post("/analyze-segments")
 async def analyze_segments(file: UploadFile = File(...), segments: str = ""):
-    """
-    Accepts audio file + JSON-encoded segment timestamps.
-    Returns per-segment emotion for transcript annotation.
-
-    segments format: JSON array of {"start": float, "end": float, "text": string}
-    """
     import json
     import numpy as np
 
@@ -322,7 +321,6 @@ async def analyze_segments(file: UploadFile = File(...), segments: str = ""):
         with open(temp_path, "wb") as f:
             f.write(contents)
 
-        # Parse segments
         try:
             seg_list = json.loads(segments) if segments else []
         except json.JSONDecodeError:
@@ -331,7 +329,6 @@ async def analyze_segments(file: UploadFile = File(...), segments: str = ""):
         if not seg_list:
             raise HTTPException(status_code=400, detail="No segments provided")
 
-        # Load raw, enhance, extract voice for emotion analysis
         raw_audio, sr = load_raw_audio(str(temp_path))
         enhanced = enhance_audio(raw_audio, sr)
         audio = extract_voice(enhanced, sr)
@@ -343,11 +340,10 @@ async def analyze_segments(file: UploadFile = File(...), segments: str = ""):
             end_sec   = float(seg.get("end", total_duration))
             text      = seg.get("text", "")
 
-            # Clamp to audio boundaries
             start_sample = max(0, int(start_sec * sr))
             end_sample   = min(len(audio), int(end_sec * sr))
 
-            if end_sample - start_sample < sr * 0.3:  # less than 300ms — too short
+            if end_sample - start_sample < sr * 0.3:
                 results.append({
                     "text":       text,
                     "start":      start_sec,
@@ -390,4 +386,3 @@ async def analyze_segments(file: UploadFile = File(...), segments: str = ""):
                 os.remove(temp_path)
             except OSError:
                 pass
-
