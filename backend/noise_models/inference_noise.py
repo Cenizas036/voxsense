@@ -19,17 +19,28 @@ from pathlib import Path
 
 import librosa
 import numpy as np
+import torch
 
 logger = logging.getLogger(__name__)
 
 # ── Configure this path ───────────────────────────────────────────────────────
-# Can also be overridden via environment variable NOISE_PROJECT_ROOT
+# Resolves automatically relative to this file's location first,
+# then falls back to environment variable, then hardcoded path.
+_THIS_DIR  = Path(__file__).resolve().parent          # backend/noise_models/
+_REPO_ROOT = _THIS_DIR.parent.parent                  # project root
+
 NOISE_PROJECT_ROOT = Path(
     os.environ.get(
         "NOISE_PROJECT_ROOT",
-        r"C:\Users\KIIT0001\Mini Project\background_noise_classifier",
+        str(_REPO_ROOT / "background_noise_classifier"),  # try sibling folder first
     )
 )
+
+# If sibling folder doesn't exist, fall back to the known local path
+if not NOISE_PROJECT_ROOT.exists():
+    NOISE_PROJECT_ROOT = Path(
+        r"C:\Users\KIIT0001\Mini Project\background_noise_classifier"
+    )
 
 SCENE_DISPLAY = {
     "street_traffic": "Street / Traffic",
@@ -39,8 +50,34 @@ SCENE_DISPLAY = {
     "construction":   "Construction Site",
 }
 
+# ── Preprocessing — mirrors predict_combined.py exactly ──────────────────────
+
+def _preprocess(audio_path: str) -> torch.Tensor:
+    """
+    Identical preprocessing to src/predict_combined.py::preprocess()
+    so we get the same mel-spectrogram the models were trained on.
+    """
+    # Import config from friend's project
+    root_str = str(NOISE_PROJECT_ROOT)
+    if root_str not in sys.path:
+        sys.path.insert(0, root_str)
+
+    from src.config import SAMPLE_RATE, CLIP_DURATION, N_MELS, N_FFT, HOP_LENGTH, F_MIN, F_MAX
+
+    y, _ = librosa.load(audio_path, sr=SAMPLE_RATE, mono=True)
+    n    = int(SAMPLE_RATE * CLIP_DURATION)
+    y    = np.pad(y, (0, max(0, n - len(y))))[:n]
+    S    = librosa.feature.melspectrogram(
+        y=y, sr=SAMPLE_RATE, n_mels=N_MELS,
+        n_fft=N_FFT, hop_length=HOP_LENGTH, fmin=F_MIN, fmax=F_MAX,
+    )
+    log_S = librosa.power_to_db(S, ref=np.max)
+    lo, hi = log_S.min(), log_S.max()
+    spec  = (log_S - lo) / (hi - lo + 1e-8)
+    return torch.from_numpy(spec).float().unsqueeze(0).unsqueeze(0)  # (1,1,M,T)
+
+
 # ── Try to load friend's models once at import time ──────────────────────────
-# This makes startup errors visible immediately instead of hiding on first call.
 _friend_models_ok = False
 _import_error_msg = ""
 
@@ -61,9 +98,22 @@ def _try_import_friend_models():
         sys.path.insert(0, root_str)
 
     try:
-        import src.predict_combined  # noqa: F401  — just check it's importable
+        from src.config       import SCENE_CLASSES, CHECKPOINT_DIR  # noqa
+        from src.noise_config import NOISE_CLASSES, NOISE_CHECKPOINT, NUM_NOISE_CLASSES  # noqa
+        from src.model        import EnvCNN  # noqa
+
+        # Verify checkpoint files actually exist
+        scene_ckpt_path = CHECKPOINT_DIR / "best_model.pt"
+        noise_ckpt_path = Path(str(NOISE_CHECKPOINT))
+
+        if not scene_ckpt_path.exists():
+            raise FileNotFoundError(f"Scene checkpoint not found: {scene_ckpt_path}")
+        if not noise_ckpt_path.exists():
+            raise FileNotFoundError(f"Noise checkpoint not found: {noise_ckpt_path}")
+
         _friend_models_ok = True
         logger.info("[inference_noise] Friend noise models imported OK from %s", root_str)
+
     except Exception as e:
         _import_error_msg = traceback.format_exc()
         logger.error(
@@ -74,9 +124,8 @@ def _try_import_friend_models():
 _try_import_friend_models()
 
 
-# ── Rule-based fallback (uses audio_cleaning.detect_noise_environment) ────────
+# ── Rule-based fallback ───────────────────────────────────────────────────────
 def _fallback_environment(audio_path: str) -> str:
-    """Load raw audio and run the rule-based detector from audio_cleaning.py."""
     try:
         from audio_cleaning import detect_noise_environment
         audio, sr = librosa.load(audio_path, sr=None, mono=True)
@@ -92,9 +141,11 @@ def _fallback_environment(audio_path: str) -> str:
 def predict_noise_environment(audio_path: str) -> dict:
     """
     Run scene + noise classification on a raw (uncleaned) audio file.
+    Mirrors predict_combined.py exactly — same preprocessing, same models,
+    same inference logic. Does not interfere with any other part of the project.
 
-    Always returns a complete dict — never raises. Falls back to rule-based
-    detection if the friend's ML models are unavailable.
+    Always returns a complete dict — never raises.
+    Falls back to rule-based detection if ML models are unavailable.
 
     Returns
     -------
@@ -108,33 +159,77 @@ def predict_noise_environment(audio_path: str) -> dict:
         top_scenes         : list[dict]
         top_noises         : list[dict]
     """
-    # ── Try ML models first ───────────────────────────────────────────────────
+
+    # ── Try ML models (mirrors predict_combined.py exactly) ──────────────────
     if _friend_models_ok:
         root_str = str(NOISE_PROJECT_ROOT)
         injected = root_str not in sys.path
         if injected:
             sys.path.insert(0, root_str)
         try:
-            from src.predict_combined import predict_combined
-            from src.config           import SCENE_CLASSES
-            from src.noise_config     import NOISE_CLASSES
+            from src.config       import SCENE_CLASSES, CHECKPOINT_DIR
+            from src.noise_config import NOISE_CLASSES, NOISE_CHECKPOINT, NUM_NOISE_CLASSES
+            from src.model        import EnvCNN
 
-            top_scene, top_noise, scene_probs, noise_probs = predict_combined(
-                audio_path, top_k_scene=3, top_k_noise=5
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+            # Preprocess — identical to predict_combined.py
+            spec = _preprocess(audio_path).to(device)
+
+            # ── Scene model ───────────────────────────────────────────────────
+            scene_model = EnvCNN(num_classes=len(SCENE_CLASSES)).to(device)
+            scene_ckpt  = torch.load(
+                CHECKPOINT_DIR / "best_model.pt",
+                map_location=device,
+                weights_only=False,
             )
+            scene_model.load_state_dict(scene_ckpt["model_state"])
+            scene_model.eval()
+
+            with torch.no_grad():
+                scene_probs = torch.softmax(
+                    scene_model(spec), dim=-1
+                )[0].cpu().numpy()
+
+            # ── Noise model ───────────────────────────────────────────────────
+            noise_model = EnvCNN(num_classes=NUM_NOISE_CLASSES).to(device)
+            noise_ckpt  = torch.load(
+                NOISE_CHECKPOINT,
+                map_location=device,
+                weights_only=False,
+            )
+            noise_model.load_state_dict(noise_ckpt["model_state"])
+            noise_model.eval()
+
+            with torch.no_grad():
+                noise_probs = torch.softmax(
+                    noise_model(spec), dim=-1
+                )[0].cpu().numpy()
+
+            # ── Build results ─────────────────────────────────────────────────
+            top_scene = SCENE_CLASSES[scene_probs.argmax()]
+            top_noise = NOISE_CLASSES[noise_probs.argmax()]
 
             top_scenes = [
-                {"label": SCENE_CLASSES[i], "confidence": round(float(scene_probs[i]) * 100, 2)}
+                {
+                    "label":      SCENE_CLASSES[i],
+                    "confidence": round(float(scene_probs[i]) * 100, 2),
+                }
                 for i in scene_probs.argsort()[::-1][:3]
             ]
             top_noises = [
-                {"label": NOISE_CLASSES[i], "confidence": round(float(noise_probs[i]) * 100, 2)}
+                {
+                    "label":      NOISE_CLASSES[i],
+                    "confidence": round(float(noise_probs[i]) * 100, 2),
+                }
                 for i in noise_probs.argsort()[::-1][:5]
             ]
 
             scene_conf = round(float(scene_probs.max()) * 100, 2)
             noise_conf = round(float(noise_probs.max()) * 100, 2)
-            audio_env  = SCENE_DISPLAY.get(top_scene, top_scene.replace("_", " ").title())
+            audio_env  = SCENE_DISPLAY.get(
+                top_scene, top_scene.replace("_", " ").title()
+            )
 
             logger.info(
                 "[inference_noise] ML result: scene=%s (%.1f%%) noise=%s (%.1f%%)",
@@ -168,7 +263,6 @@ def predict_noise_environment(audio_path: str) -> dict:
     )
     env = _fallback_environment(audio_path)
 
-    # Map rule-based labels to a consistent shape
     env_display_map = {
         "hum":       "Indoor (Electrical Hum)",
         "wind":      "Outdoor (Wind)",
