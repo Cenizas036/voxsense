@@ -40,8 +40,6 @@ if os.path.exists(MODEL_PATH):
 
         avg_dominance = float(np.mean(dominant_counts))
 
-        # Healthy model: average max prob < 0.65 (spread across classes)
-        # Biased model:  average max prob > 0.65 (always same class)
         if avg_dominance < 0.65:
             _model_ok = True
             print(f"Emotion model: loaded and healthy (avg dominance={avg_dominance:.2f}).")
@@ -128,19 +126,20 @@ def acoustic_emotion(audio: np.ndarray, sr: int) -> dict:
     zcr      = float(np.mean(librosa.feature.zero_crossing_rate(audio)))
 
     # ── Score initialisation ──────────────────────────────────
+    # FIX: reduced neutral prior, boosted happy prior
+    # neutral was dominating because it started higher and got
+    # boosted for moderate energy which is where most speech sits
     s = {
-        "neutral":  1.0,
-        "happy":    0.8,   # slightly favour positive — real speech leans positive
+        "neutral":  0.6,   # was 1.0 — too dominant as default
+        "happy":    1.0,   # was 0.8 — most real speech leans positive
         "sad":      0.4,
         "angry":    0.4,
         "fear":     0.2,
-        "disgust":  0.2,   # disgust is rare in real conversation — low prior
+        "disgust":  0.2,
         "surprise": 0.3,
     }
 
     # ── Energy (most reliable single cue) ─────────────────────
-    # High energy = active emotion (happy/angry/surprise)
-    # Low energy  = passive emotion (sad/neutral/disgust)
     if rms > 0.22:
         # Very high energy — angry or very excited
         s["angry"]    += 3.5
@@ -153,33 +152,32 @@ def acoustic_emotion(audio: np.ndarray, sr: int) -> dict:
         s["surprise"] += 1.0
         s["neutral"]  += 0.5
     elif rms > 0.07:
-        # Moderate energy — neutral or mildly happy
-        s["neutral"]  += 2.5
-        s["happy"]    += 1.5
-        s["sad"]      += 0.5
+        # Moderate energy — FIX: was neutral +2.5, happy +1.5
+        # Most conversational happy speech lives here, so boost happy
+        s["happy"]    += 2.5   # was 1.5
+        s["neutral"]  += 1.2   # was 2.5
+        s["sad"]      += 0.3
     else:
         # Low energy — sad, neutral, disgust
         s["sad"]      += 3.0
         s["neutral"]  += 1.5
         s["disgust"]  += 1.0
 
-    # ── Energy dynamics (variation matters a lot) ─────────────
-    # Emotional speech has big energy swings; monotone doesn't
+    # ── Energy dynamics ───────────────────────────────────────
     if energy_var > 0.10:
         s["happy"]    += 2.0
         s["angry"]    += 1.5
         s["surprise"] += 1.0
     elif energy_var > 0.05:
-        s["happy"]    += 1.0
-        s["neutral"]  += 0.5
+        s["happy"]    += 1.2   # was 1.0 — small boost
+        s["neutral"]  += 0.3   # was 0.5 — reduced
     else:
-        # Very flat energy = monotone = sad/neutral/disgust
-        s["neutral"]  += 1.5
+        # FIX: was neutral +2.0 — too aggressive, flat speech can still be happy
+        s["neutral"]  += 1.0   # was 2.0
         s["sad"]      += 1.0
         s["disgust"]  += 0.5
 
     # ── Pitch height ──────────────────────────────────────────
-    # High pitch = excited/scared; low pitch = sad/calm
     if mean_f0 > 260:
         s["happy"]    += 2.5
         s["surprise"] += 2.5
@@ -189,18 +187,17 @@ def acoustic_emotion(audio: np.ndarray, sr: int) -> dict:
         s["surprise"] += 1.0
         s["fear"]     += 0.5
     elif mean_f0 > 150:
-        s["neutral"]  += 1.0
-        s["happy"]    += 0.5
+        # FIX: added happy boost here — mid pitch is common in happy speech
+        s["neutral"]  += 0.8   # was 1.0
+        s["happy"]    += 1.0   # was 0.5
     elif mean_f0 < 110 and mean_f0 > 0:
         s["sad"]      += 2.5
         s["neutral"]  += 1.0
         s["disgust"]  += 0.5
 
     # ── Pitch variation (expressiveness) ──────────────────────
-    # Happy/surprised speech has wide pitch swings
-    # Sad/disgust is monotone
     if f0_var > 60:
-        s["happy"]    += 3.0   # ← KEY: jolly/animated speech has high pitch var
+        s["happy"]    += 3.0
         s["surprise"] += 2.5
         s["fear"]     += 1.0
         s["angry"]    += 0.5
@@ -209,33 +206,31 @@ def acoustic_emotion(audio: np.ndarray, sr: int) -> dict:
         s["surprise"] += 1.0
         s["angry"]    += 0.5
     elif f0_var > 18:
-        s["neutral"]  += 1.5
-        s["happy"]    += 0.5
+        # FIX: added happy boost — moderate pitch variation is common in happy
+        s["neutral"]  += 1.0   # was 1.5
+        s["happy"]    += 1.0   # was 0.5
     else:
-        # Very monotone pitch
-        s["neutral"]  += 2.0
+        # FIX: was neutral +2.0 — reduced, monotone != always neutral
+        s["neutral"]  += 0.8   # was 2.0
         s["sad"]      += 1.5
         s["disgust"]  += 0.8
 
     # ── Voiced fraction ───────────────────────────────────────
-    # Continuous voicing = singing/smooth speech; choppy = normal speech
     if voiced_frac > 0.75:
-        s["happy"]    += 1.0
+        s["happy"]    += 1.2   # was 1.0 — slight boost
         s["sad"]      += 0.5
     elif voiced_frac < 0.35:
         s["angry"]    += 0.5
         s["fear"]     += 0.5
 
     # ── Spectral brightness (ZCR + centroid) ──────────────────
-    # Angry/fear speech is spectrally harsh (high ZCR, high centroid)
-    # Sad/disgust is dull (low ZCR, low centroid)
     if zcr > 0.13:
         s["angry"]    += 2.5
         s["fear"]     += 1.5
         s["surprise"] += 0.5
     elif zcr > 0.09:
         s["angry"]    += 1.0
-        s["happy"]    += 0.5
+        s["happy"]    += 0.8   # was 0.5 — slightly brighter = happier
     elif zcr < 0.04:
         s["sad"]      += 1.0
         s["neutral"]  += 0.5
@@ -243,19 +238,16 @@ def acoustic_emotion(audio: np.ndarray, sr: int) -> dict:
 
     if centroid > 4000:
         s["angry"]    += 1.5
-        s["happy"]    += 1.0
+        s["happy"]    += 1.2   # was 1.0
         s["surprise"] += 0.5
     elif centroid > 3000:
-        s["happy"]    += 0.5
-        s["neutral"]  += 0.5
+        s["happy"]    += 1.0   # was 0.5 — bright spectrum = happy
+        s["neutral"]  += 0.3   # was 0.5
     elif centroid < 1800:
         s["sad"]      += 1.0
         s["disgust"]  += 0.3
 
     # ── Disgust suppression ───────────────────────────────────
-    # Disgust in real speech is very rare and acoustically similar to
-    # bored/neutral. Only allow it to win if other features clearly support it.
-    # Requirement: must have low energy + low pitch + monotone + low ZCR
     disgust_support = (
         rms < 0.06 and
         mean_f0 < 130 and
@@ -263,7 +255,7 @@ def acoustic_emotion(audio: np.ndarray, sr: int) -> dict:
         zcr < 0.05
     )
     if not disgust_support:
-        s["disgust"] = min(s["disgust"], 0.3)   # cap disgust if not acoustically supported
+        s["disgust"] = min(s["disgust"], 0.3)
 
     # ── Normalize to probabilities ────────────────────────────
     total = sum(s.values())
